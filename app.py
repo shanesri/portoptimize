@@ -95,37 +95,47 @@ def optimize_portfolio(avg_returns, cov_matrix, rf_rate, tickers, use_constraint
 
     return opt_sharpe.x, opt_vol.x, opt_target_ret, opt_target_vol
 
-# --- SECTION 3: SIDEBAR INPUTS ---
+# --- SECTION 3: CONFIGURATION (MAIN PAGE) ---
 
-with st.sidebar:
-    st.header("1. Asset Selection")
+st.divider()
+col1, col2, col3 = st.columns(3)
+
+with col1:
+    st.subheader("1. Assets & Dates")
     default_tickers = "VTI, TLT, IEF, GLD, PDBC"
     tickers_input = st.text_input("Tickers (comma separated)", default_tickers)
     tickers = [t.strip().upper() for t in tickers_input.split(',') if t.strip()]
 
-    start_date = st.date_input("Start Date", pd.to_datetime("2015-01-01"))
-    end_date = st.date_input("End Date", pd.to_datetime("2023-12-31"))
+    c1_1, c1_2 = st.columns(2)
+    start_date = c1_1.date_input("Start Date", pd.to_datetime("2015-01-01"))
+    end_date = c1_2.date_input("End Date", pd.to_datetime("2023-12-31"))
 
-    st.header("2. Parameters")
+with col2:
+    st.subheader("2. Params & Targets")
     rf_rate = st.number_input("Risk-Free Rate (decimal)", value=0.04, step=0.005, format="%.3f")
+    
+    c2_1, c2_2 = st.columns(2)
+    target_ret_val = c2_1.number_input("Target Return", value=0.075, step=0.005, format="%.3f")
+    target_vol_val = c2_2.number_input("Target Risk", value=0.080, step=0.005, format="%.3f")
+    
     return_mode = st.selectbox("Return Assumption", ["historical", "investor_views"])
-
+    
     investor_views = {}
     if return_mode == "investor_views":
-        st.info("Enter expected annual return (decimal) for each ticker:")
-        for t in tickers:
-            investor_views[t] = st.number_input(f"View: {t}", value=0.07, step=0.01, key=f"view_{t}")
+        with st.expander("Enter Investor Views", expanded=True):
+            for t in tickers:
+                investor_views[t] = st.number_input(f"View: {t}", value=0.07, step=0.01, key=f"view_{t}")
 
-    st.header("3. Constraints")
+with col3:
+    st.subheader("3. Constraints")
     use_constraints = st.checkbox("Use Weight Constraints", value=True)
     min_w = st.slider("Min Weight", 0.0, 0.5, 0.05, 0.01)
     max_w = st.slider("Max Weight", 0.0, 1.0, 0.40, 0.01)
+    
+    st.markdown("---")
+    run_btn = st.button("Run Optimization", type="primary", use_container_width=True)
 
-    st.header("4. Targets")
-    target_ret_val = st.number_input("Target Return Goal", value=0.075, step=0.005, format="%.3f")
-    target_vol_val = st.number_input("Target Risk Goal", value=0.080, step=0.005, format="%.3f")
-
-    run_btn = st.button("Run Optimization", type="primary")
+st.divider()
 
 # --- SECTION 4: MAIN EXECUTION & VISUALIZATION ---
 
@@ -151,7 +161,7 @@ if run_btn:
                 # 4. Display Results
                 
                 # --- A. Weights Table ---
-                st.subheader("1. Optimized Weights")
+                st.subheader("Results: Optimized Weights")
                 
                 # Check feasibility
                 stats_target_ret = get_portfolio_stats(res_target_ret.x, avg_returns, cov_matrix, rf_rate)
@@ -180,13 +190,13 @@ if run_btn:
                     st.warning(f"⚠️ Target Risk {target_vol_val:.1%} is not feasible with current constraints.")
 
                 # --- B. Performance Summary ---
-                st.subheader("2. Performance Summary")
+                st.subheader("Performance Summary")
                 stats_sharpe = get_portfolio_stats(w_sharpe, avg_returns, cov_matrix, rf_rate)
                 stats_vol = get_portfolio_stats(w_vol, avg_returns, cov_matrix, rf_rate)
                 
-                col1, col2 = st.columns(2)
+                sum_col1, sum_col2 = st.columns(2)
                 
-                with col1:
+                with sum_col1:
                     st.markdown(f"""
                     **Max Sharpe Ratio**
                     - Return: `{stats_sharpe[0]:.2%}`
@@ -194,7 +204,7 @@ if run_btn:
                     - Sharpe: `{stats_sharpe[2]:.2f}`
                     """)
                 
-                with col2:
+                with sum_col2:
                     st.markdown(f"""
                     **Minimum Volatility**
                     - Return: `{stats_vol[0]:.2%}`
@@ -203,7 +213,7 @@ if run_btn:
                     """)
 
                 # --- C. Plots ---
-                st.subheader("3. Visualizations")
+                st.subheader("Visualizations")
                 tab1, tab2 = st.tabs(["Efficient Frontier", "Correlation Matrix"])
 
                 with tab1:
@@ -253,4 +263,4 @@ if run_btn:
                     ax_corr.set_title("Covariance Matrix")
                     st.pyplot(fig_corr)
 else:
-    st.info("👈 Use the sidebar to configure assets and parameters, then click **Run Optimization**.")
+    st.info("👈 Configure assets above and click **Run Optimization**.")
