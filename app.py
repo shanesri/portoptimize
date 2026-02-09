@@ -4,15 +4,169 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
+import altair as alt
 from scipy.optimize import minimize
 
 # --- PAGE CONFIGURATION ---
 st.set_page_config(page_title="Portfolio Optimizer", layout="wide")
 
+# --- CUSTOM CSS (From your Macro Dashboard) ---
+st.markdown(
+    """
+    <style>
+    [data-testid="stAppViewBlockContainer"] {
+        max-width: 1200px !important;
+        margin: 0 auto !important;
+        padding-top: 2rem !important;
+    }
+    
+    .stMainBlockContainer {
+        max-width: 1200px !important;
+        margin: 0 auto !important;
+    }
+
+    /* Sidebar Styling */
+    [data-testid="stSidebar"] {
+        background-color: #0e1117;
+    }
+    
+    .nav-item {
+        padding: 10px 15px;
+        border-radius: 8px;
+        margin-bottom: 5px;
+        font-weight: 500;
+        color: #8b949e;
+        font-size: 16px;
+    }
+    
+    .nav-item a {
+        color: inherit;
+        text-decoration: none;
+        display: block;
+        width: 100%;
+    }
+
+    .nav-active {
+        background-color: #1f2937;
+        color: #ffffff !important;
+        border-left: 4px solid #4589ff;
+    }
+
+    h1, h2, h3 {
+        font-family: 'Inter', sans-serif;
+    }
+
+    /* Custom Danger Red for Warning Bubbles */
+    div[data-testid="stNotification"] {
+        background-color: #ff4b4b !important;
+        color: white !important;
+    }
+    div[data-testid="stNotification"] svg {
+        fill: white !important;
+    }
+
+    /* Card Styling for Results */
+    .metric-card {
+        background-color: #1e2130;
+        padding: 20px;
+        border-radius: 10px;
+        border: 1px solid #30363d;
+        text-align: center;
+        margin-bottom: 10px;
+    }
+    .metric-label {
+        color: #8b949e;
+        font-size: 14px;
+        font-weight: 600;
+        text-transform: uppercase;
+        margin-bottom: 8px;
+    }
+    .metric-value {
+        color: #ffffff;
+        font-size: 28px;
+        font-weight: 700;
+    }
+    .metric-delta {
+        font-size: 16px;
+        font-weight: 600;
+        margin-top: 4px;
+    }
+    .delta-gain {
+        color: #26a69a;
+    }
+    .delta-loss {
+        color: #ef5350;
+    }
+    .delta-neutral {
+        color: #ffffff;
+    }
+    
+    /* Special VAR/CVAR Card styling */
+    .risk-card {
+        background-color: #251212;
+        border: 1px solid #632a2a;
+        text-align: left;
+        padding: 22px;
+        min-height: 140px;
+    }
+    .cvar-card {
+        background-color: #350a0a;
+        border: 1px solid #8e1e1e;
+    }
+    .var-text {
+        color: #ffffff;
+        font-size: 17px;
+        line-height: 1.4;
+    }
+    .var-highlight {
+        font-weight: 700;
+        color: #ef5350;
+    }
+    
+    /* Success/Failure Card styling */
+    .success-card {
+        background-color: #102a1e;
+        border: 1px solid #1e6341;
+    }
+    .failure-card {
+        background-color: #2a1010;
+        border: 1px solid #631e1e;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+# --- SIDEBAR NAVIGATION ---
+with st.sidebar:
+    st.title("Navigation")
+    st.markdown('<div class="nav-item"><a href="https://shanegreeting.streamlit.app/" target="_blank">👋 Greeting</a></div>', unsafe_allow_html=True)
+    # Marked as active since we are on this tool
+    st.markdown('<div class="nav-item nav-active">📊 Portfolio Optimizer</div>', unsafe_allow_html=True)
+    st.markdown('<div class="nav-item"><a href="https://shanesri.com" target="_blank">🔗 Creator Info</a></div>', unsafe_allow_html=True)
+
+
+# --- MAIN APP CONTENT ---
+
 st.title("📊 Portfolio Optimizer & Efficient Frontier")
 st.markdown("""
 This app optimizes a portfolio for **Maximum Sharpe Ratio**, **Minimum Volatility**, and specific **Target Return/Risk** goals using the Efficient Frontier.
 """)
+
+# --- HELPER FUNCTIONS ---
+
+@st.cache_data
+def get_ticker_info(ticker_list):
+    """Fetches short names for tickers to display in the UI."""
+    info_map = {}
+    for t in ticker_list:
+        try:
+            # Fetching shortName to ensure we get the full asset title
+            name = yf.Ticker(t).info.get('shortName', t)
+            info_map[t] = name
+        except:
+            info_map[t] = t
+    return info_map
 
 # --- SECTION 1: DATA & CALCULATIONS (Cached) ---
 
@@ -97,43 +251,141 @@ def optimize_portfolio(avg_returns, cov_matrix, rf_rate, tickers, use_constraint
 
 # --- SECTION 3: CONFIGURATION (MAIN PAGE) ---
 
+# Initialize Session State for Tickers if not present
+if 'tickers_list' not in st.session_state:
+    st.session_state.tickers_list = ['VTI', 'TLT', 'IEF', 'GLD', 'PDBC']
+
 st.divider()
-col1, col2, col3 = st.columns(3)
 
-with col1:
-    st.subheader("1. Assets & Dates")
-    default_tickers = "VTI, TLT, IEF, GLD, PDBC"
-    tickers_input = st.text_input("Tickers (comma separated)", default_tickers)
-    tickers = [t.strip().upper() for t in tickers_input.split(',') if t.strip()]
+# --- STEP 1: ASSET CONFIGURATION ---
+st.subheader("1. Asset Configuration")
+c1_A, c1_B = st.columns([1, 2])
 
-    c1_1, c1_2 = st.columns(2)
-    start_date = c1_1.date_input("Start Date", pd.to_datetime("2015-01-01"))
-    end_date = c1_2.date_input("End Date", pd.to_datetime("2023-12-31"))
+with c1_A:
+    # -- Ticker Input Logic --
+    c_in, c_add = st.columns([2, 1])
+    with c_in:
+        new_ticker = st.text_input("Add Ticker", placeholder="Try AAPL", label_visibility="collapsed").strip().upper()
+    with c_add:
+        if st.button("Add", type="secondary", use_container_width=True):
+            if new_ticker and new_ticker not in st.session_state.tickers_list:
+                st.session_state.tickers_list.append(new_ticker)
+                st.rerun()
+    
+    # -- Data Range Logic --
+    years_back = st.selectbox("Data Range (Years)", [1, 3, 5, 10], index=2)
+    end_date = pd.Timestamp.today()
+    start_date = end_date - pd.DateOffset(years=years_back)
+    st.caption(f"From **{start_date.strftime('%Y-%m-%d')}** to **{end_date.strftime('%Y-%m-%d')}**")
 
-with col2:
-    st.subheader("2. Params & Targets")
-    rf_rate = st.number_input("Risk-Free Rate (decimal)", value=0.04, step=0.005, format="%.3f")
-    
-    c2_1, c2_2 = st.columns(2)
-    target_ret_val = c2_1.number_input("Target Return", value=0.075, step=0.005, format="%.3f")
-    target_vol_val = c2_2.number_input("Target Risk", value=0.080, step=0.005, format="%.3f")
-    
-    return_mode = st.selectbox("Return Assumption", ["historical", "investor_views"])
-    
-    investor_views = {}
-    if return_mode == "investor_views":
-        with st.expander("Enter Investor Views", expanded=True):
-            for t in tickers:
-                investor_views[t] = st.number_input(f"View: {t}", value=0.07, step=0.01, key=f"view_{t}")
+with c1_B:
+    # -- Ticker Table --
+    if st.session_state.tickers_list:
+        tickers = st.session_state.tickers_list
+        ticker_names = get_ticker_info(tickers)
+        
+        df_data = []
+        for t in tickers:
+            df_data.append({
+                "Active": True, 
+                "Ticker": t, 
+                "Name": ticker_names.get(t, t)
+            })
+        df = pd.DataFrame(df_data)
 
-with col3:
-    st.subheader("3. Constraints")
-    use_constraints = st.checkbox("Use Weight Constraints", value=True)
-    min_w = st.slider("Min Weight", 0.0, 0.5, 0.05, 0.01)
-    max_w = st.slider("Max Weight", 0.0, 1.0, 0.40, 0.01)
-    
-    st.markdown("---")
-    run_btn = st.button("Run Optimization", type="primary", use_container_width=True)
+        column_config = {
+            "Active": st.column_config.CheckboxColumn("Active", help="Uncheck to remove", default=True, width="small"),
+            "Ticker": st.column_config.TextColumn("Ticker", disabled=True, width="small"),
+            "Name": st.column_config.TextColumn("Asset Name", disabled=True),
+        }
+
+        edited_df = st.data_editor(
+            df, 
+            column_config=column_config, 
+            use_container_width=True, 
+            hide_index=True, 
+            key="ticker_editor"
+        )
+
+        # Logic to remove unchecked items
+        current_active_tickers = edited_df[edited_df["Active"] == True]["Ticker"].tolist()
+        
+        # If the list size changed, update state and rerun
+        if len(current_active_tickers) != len(st.session_state.tickers_list):
+            st.session_state.tickers_list = current_active_tickers
+            st.rerun()
+            
+        tickers = st.session_state.tickers_list
+    else:
+        st.warning("No assets selected.")
+        tickers = []
+
+st.divider()
+
+# --- STEP 2: PARAMS & TARGETS ---
+st.subheader("2. Params & Targets")
+
+c2_1, c2_2, c2_3 = st.columns(3)
+
+with c2_1:
+    rf_input = st.number_input("Risk-Free Rate ($R_f$) (%)", value=4.00, step=0.10, format="%.2f")
+    rf_rate = rf_input / 100.0
+
+with c2_2:
+    t_ret_input = st.number_input("Target Return (%)", value=7.50, step=0.10, format="%.2f")
+    target_ret_val = t_ret_input / 100.0
+
+with c2_3:
+    t_vol_input = st.number_input("Target Risk (%)", value=8.00, step=0.10, format="%.2f")
+    target_vol_val = t_vol_input / 100.0
+
+# Investor Views Section
+st.markdown("")
+use_investor_views = st.toggle("Use Investor Views", value=False)
+return_mode = "investor_views" if use_investor_views else "historical"
+investor_views = {}
+
+st.caption("Enter your expected annual returns below. Defaults are set to 7.00%.")
+# Dynamic columns for views to save space
+cols_views = st.columns(min(len(tickers), 5)) if tickers else [st.container()]
+
+for i, t in enumerate(tickers):
+    col_idx = i % 5
+    with cols_views[col_idx]:
+        val_input = st.number_input(
+            f"{t} (%)", 
+            value=7.00, 
+            step=0.50, 
+            key=f"view_{t}", 
+            format="%.2f",
+            disabled=not use_investor_views  # Always visible, just disabled if toggle off
+        )
+        investor_views[t] = val_input / 100.0
+
+st.divider()
+
+# --- STEP 3: CONSTRAINTS ---
+st.subheader("3. Constraints")
+
+c3_1, c3_2 = st.columns([1, 3])
+
+with c3_1:
+    use_constraints = st.toggle("Use Weight Constraints", value=True)
+
+with c3_2:
+    # Sliders in % (0-100), disabled if toggle is False
+    c3_sl1, c3_sl2 = st.columns(2)
+    with c3_sl1:
+        min_w_pct = st.slider("Min Weight per Asset (%)", 0, 100, 5, 1, disabled=not use_constraints)
+    with c3_sl2:
+        max_w_pct = st.slider("Max Weight per Asset (%)", 0, 100, 100, 1, disabled=not use_constraints)
+
+    # Convert to decimals
+    min_w = min_w_pct / 100.0
+    max_w = max_w_pct / 100.0
+
+st.markdown("---")
+run_btn = st.button("Run Optimization", type="primary", use_container_width=True)
 
 st.divider()
 
@@ -182,6 +434,8 @@ if run_btn:
                     weights_data[f'Target Risk ({target_vol_val:.1%})'] = (res_target_vol.x * 100).round(2)
 
                 df_weights = pd.DataFrame(weights_data)
+                # Set index to start from 1 instead of 0
+                df_weights.index = range(1, len(df_weights) + 1)
                 st.dataframe(df_weights, use_container_width=True)
 
                 if not is_feasible_ret:
@@ -198,69 +452,140 @@ if run_btn:
                 
                 with sum_col1:
                     st.markdown(f"""
-                    **Max Sharpe Ratio**
-                    - Return: `{stats_sharpe[0]:.2%}`
-                    - Volatility: `{stats_sharpe[1]:.2%}`
-                    - Sharpe: `{stats_sharpe[2]:.2f}`
-                    """)
+                    <div class="metric-card">
+                        <div class="metric-label">Max Sharpe Ratio</div>
+                        <div class="metric-value">{stats_sharpe[2]:.2f}</div>
+                        <div class="metric-delta delta-gain">Ret: {stats_sharpe[0]:.1%} | Vol: {stats_sharpe[1]:.1%}</div>
+                    </div>
+                    """, unsafe_allow_html=True)
                 
                 with sum_col2:
                     st.markdown(f"""
-                    **Minimum Volatility**
-                    - Return: `{stats_vol[0]:.2%}`
-                    - Volatility: `{stats_vol[1]:.2%}`
-                    - Sharpe: `{stats_vol[2]:.2f}`
-                    """)
+                    <div class="metric-card">
+                        <div class="metric-label">Minimum Volatility</div>
+                        <div class="metric-value">{stats_vol[1]:.1%}</div>
+                        <div class="metric-delta delta-gain">Ret: {stats_vol[0]:.1%} | Sharpe: {stats_vol[2]:.2f}</div>
+                    </div>
+                    """, unsafe_allow_html=True)
 
                 # --- C. Plots ---
                 st.subheader("Visualizations")
-                tab1, tab2 = st.tabs(["Efficient Frontier", "Correlation Matrix"])
-
-                with tab1:
-                    # Efficient Frontier Plot
-                    fig, ax = plt.subplots(figsize=(10, 6))
-
-                    # Monte Carlo Simulation for cloud
-                    n_sim = 1000
-                    sim_rets = []
-                    sim_vols = []
+                
+                # 1. Efficient Frontier (Full Width)
+                st.markdown("### Efficient Frontier")
+                
+                # 1. Monte Carlo Simulation
+                n_sim = 1000
+                sim_rets = []
+                sim_vols = []
+                
+                for _ in range(n_sim):
+                    w = np.random.random(len(tickers))
+                    w /= np.sum(w)
+                    if use_constraints:
+                        if np.any(w < min_w) or np.any(w > max_w):
+                            continue
                     
-                    for _ in range(n_sim):
-                        w = np.random.random(len(tickers))
-                        w /= np.sum(w)
-                        # Quick check for constraints to make the cloud relevant
-                        if use_constraints:
-                            if np.any(w < min_w) or np.any(w > max_w):
-                                continue
+                    r, v, _ = get_portfolio_stats(w, avg_returns, cov_matrix, rf_rate)
+                    sim_rets.append(r)
+                    sim_vols.append(v)
+                
+                # 2. Prepare DataFrames for Altair (SIMPLIFIED SINGLE DATASET)
+                
+                # Cloud Data
+                df_cloud = pd.DataFrame({
+                    'Volatility': sim_vols, 
+                    'Return': sim_rets,
+                    'Type': 'Random'
+                })
+                
+                # Special Points Data
+                special_points_list = [
+                    {'Volatility': stats_sharpe[1], 'Return': stats_sharpe[0], 'Type': 'Max Sharpe'},
+                    {'Volatility': stats_vol[1], 'Return': stats_vol[0], 'Type': 'Min Volatility'}
+                ]
+                
+                if is_feasible_ret:
+                    special_points_list.append({'Volatility': stats_target_ret[1], 'Return': stats_target_ret[0], 'Type': 'Target Return'})
+                
+                if is_feasible_vol:
+                    special_points_list.append({'Volatility': stats_target_vol[1], 'Return': stats_target_vol[0], 'Type': 'Target Risk'})
+                    
+                df_special = pd.DataFrame(special_points_list)
+                
+                # Combine into one main DataFrame
+                df_all = pd.concat([df_cloud, df_special], ignore_index=True)
+
+                # 3. Simple Altair Chart (No Layers, Single Mark Point)
+                chart = alt.Chart(df_all).mark_point(filled=True, size=60).encode(
+                    x=alt.X('Volatility', type='quantitative', title='Annualized Volatility (Risk)', axis=alt.Axis(format='%'), scale=alt.Scale(zero=False)),
+                    y=alt.Y('Return', type='quantitative', title='Annualized Return', axis=alt.Axis(format='%'), scale=alt.Scale(zero=False)),
+                    color=alt.Color('Type', legend=alt.Legend(title="Type")),
+                    tooltip=['Type', alt.Tooltip('Volatility', format='.2%'), alt.Tooltip('Return', format='.2%')]
+                ).properties(
+                    height=500
+                )
+                
+                st.altair_chart(chart, use_container_width=True)
+
+                st.divider()
+
+                # Split columns for Asset Allocation and Correlation Matrix
+                col_alloc, col_corr = st.columns(2)
+                
+                with col_alloc:
+                    st.subheader("Asset Allocation")
+                    
+                    # Create Tabs for different strategies
+                    tab1, tab2, tab3, tab4 = st.tabs(["Max Sharpe", "Min Vol", "Target Return", "Target Risk"])
+                    
+                    # Helper to draw pie chart
+                    def draw_pie(weights, title_suffix=""):
+                        df_pie = pd.DataFrame({'Ticker': tickers, 'Weight': weights * 100})
+                        # Filter out very small weights
+                        df_pie = df_pie[df_pie['Weight'] > 0.01]
                         
-                        r, v, _ = get_portfolio_stats(w, avg_returns, cov_matrix, rf_rate)
-                        sim_rets.append(r)
-                        sim_vols.append(v)
-                    
-                    ax.scatter(sim_vols, sim_rets, color='lightgray', alpha=0.3, s=15, label='Random Portfolios')
+                        base = alt.Chart(df_pie).encode(
+                            theta=alt.Theta("Weight", stack=True)
+                        )
+                        
+                        pie = base.mark_arc(innerRadius=60).encode(
+                            color=alt.Color("Ticker"),
+                            order=alt.Order("Weight", sort="descending"),
+                            tooltip=["Ticker", alt.Tooltip("Weight", format=".2f")]
+                        )
+                        
+                        text = base.mark_text(radius=140).encode(
+                            text=alt.Text("Weight", format=".1f"),
+                            order=alt.Order("Weight", sort="descending"),
+                            color=alt.value("white")
+                        )
+                        
+                        st.altair_chart((pie + text).properties(height=350), use_container_width=True)
 
-                    # Plot Optimized Points
-                    ax.scatter(stats_sharpe[1], stats_sharpe[0], color='red', marker='*', s=200, label='Max Sharpe')
-                    ax.scatter(stats_vol[1], stats_vol[0], color='blue', marker='*', s=200, label='Min Volatility')
+                    with tab1:
+                        draw_pie(w_sharpe)
+                        
+                    with tab2:
+                        draw_pie(w_vol)
+                        
+                    with tab3:
+                        if is_feasible_ret:
+                            draw_pie(res_target_ret.x)
+                        else:
+                            st.warning(f"Target Return {target_ret_val:.1%} not feasible.")
+                            
+                    with tab4:
+                        if is_feasible_vol:
+                            draw_pie(res_target_vol.x)
+                        else:
+                            st.warning(f"Target Risk {target_vol_val:.1%} not feasible.")
 
-                    if is_feasible_ret:
-                        ax.scatter(stats_target_ret[1], stats_target_ret[0], color='green', marker='s', s=100, label=f'Target Ret {target_ret_val:.1%}')
-                    
-                    if is_feasible_vol:
-                        ax.scatter(stats_target_vol[1], stats_target_vol[0], color='orange', marker='D', s=100, label=f'Target Risk {target_vol_val:.1%}')
-
-                    ax.set_xlabel('Annualized Volatility (Risk)')
-                    ax.set_ylabel('Annualized Return')
-                    ax.set_title('Efficient Frontier Simulation')
-                    ax.legend()
-                    ax.grid(True, alpha=0.3)
-                    st.pyplot(fig)
-
-                with tab2:
-                    # Covariance Heatmap
-                    fig_corr, ax_corr = plt.subplots(figsize=(8, 6))
-                    sns.heatmap(cov_matrix, annot=True, cmap='RdYlGn_r', fmt='.4f', ax=ax_corr)
-                    ax_corr.set_title("Covariance Matrix")
-                    st.pyplot(fig_corr)
+                with col_corr:
+                    st.subheader("Asset Correlation Matrix")
+                    # Correlation Matrix as Styled Table
+                    corr_matrix = daily_returns.corr()
+                    styled_corr = corr_matrix.style.background_gradient(cmap='RdBu_r', axis=None, vmin=-1, vmax=1).format("{:.2f}")
+                    st.dataframe(styled_corr, use_container_width=True)
 else:
     st.info("👈 Configure assets above and click **Run Optimization**.")
